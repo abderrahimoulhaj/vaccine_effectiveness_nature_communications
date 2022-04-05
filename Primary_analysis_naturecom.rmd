@@ -1,0 +1,1909 @@
+---
+title: 'Effeciveness Analysis for 3 months follow-up data'
+subtitle: ''
+author: |
+  | `r paste0("Abderrahim Oulhaj, PhD & MsC") `
+  | `r paste0("Associate Professor in Biostatistics") `
+  | `r paste0("Institute of Public Health") `
+  | `r paste0("College of Medecine and Health Sciences") `
+  | `r paste0("United Arab Emirates University") `
+date: |
+  | `r format(Sys.time(), '%d %B, %Y')`
+output:
+  html_document:
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_collapsed: yes
+    toc_float: yes
+  pdf_document:
+    highlight: pygments
+    keep_tex: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+header-includes:
+- \usepackage{colortbl}
+- \usepackage{placeins}
+
+---
+<style>
+  #TOC {
+  /*position: fixed;
+left: 0;
+top: 0;*/
+  width: 400px;
+/*height: 100%;
+overflow:auto;*/
+  }
+h1.title {
+  font-size: 38px;
+ // color: DarkRed;
+}
+h1 { /* Header 1 */
+  font-size: 28px;
+  color: DarkBlue;
+}
+h2 { /* Header 2 */
+    font-size: 22px;
+  color: DarkBlue;
+}
+
+h3 { /* Header 3 */
+    font-size: 20px;
+  color: DarkBlue;
+}
+</style>
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, cache=FALSE,  comment=FALSE, warning=FALSE, message = FALSE)
+
+#A. Paths
+path_global = switch(Sys.info()[['user']],
+                     "ku1041" = "C:/oulhaj_2022_01_05//4_Research/00000_My_Projects/RFunctions",
+                     "C:/oulhaj_2022_01_05/4_Research/00000_My_Projects/RFunctions"
+                     )
+
+path_local = dirname(getwd())  
+
+#B. Libraries
+
+library(survival)
+#library(survminer) #for ggsurvplot, ggcoxzph, ggcoxdiagnostics, ggcoxfunctional
+library(directlabels) #for geom_dl which creates labels at the end of KM plot
+library(Gmisc)
+library(dplyr)
+library(ggplot2)
+library(purrr) #for map and map2
+library(mice) #for md.pattern
+library(hdnom)
+library(rms) #for survplot,npsurv
+library(pec) #for selectCox stepwsie procedure using pval and aic #
+library(cmprsk) #competing risk analysis#
+library(MatchIt) #propensity scores#
+library(ztable) 
+library(fastDummies) #split multinomail factor into dummies binary# 
+library(R.utils) #for function insert#
+library(standardize) #standardise propensity score = distance#
+library(knitr) 
+library(kableExtra)
+library(riskRegression)
+library(crrstep) #stepwise #
+library(lubridate)
+library(prodlim) #for Median follow-up#
+
+library(janitor) #remove empty rows and columns. used function remove_empty#
+library(tidyverse)
+#library(summarytools) #For nice cross tabulations#
+#CHANGES HERE#
+library(ggpubr)
+library(DescTools) #For geometric mean and 95% CI#
+#C. Function
+#source(paste0(path_local,"/2_programs/functions.R"))
+source(paste0(path_global,"/0_programs/DemoTables.R"))
+source(paste0(path_global,"/0_programs/graphs.R"))
+library(coxphw)
+library(gtsummary)
+library(gt)
+library(survminer)
+#source(paste0(path_local,"/2_programs/oxygen_therapy_codes_v1.0.R"))
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE }
+#A. Read Data#
+df <- read.csv(paste0(dirname(getwd()),'/1_data/3_final/df_final3.csv'), stringsAsFactors=FALSE, na.strings = c("N/A","NA", "")) %>% remove_empty(c("rows", "cols"))
+
+df_remove = read.csv(paste0(dirname(getwd()),'/1_data/3_final/df_outcome_remove_prior_base.csv'), stringsAsFactors=FALSE, na.strings = c("N/A","NA", "")) %>% remove_empty(c("rows", "cols"))
+
+####################
+#Define covariates##
+####################
+
+df = df %>% mutate(
+#1. Demographics and commorbidities#
+
+treat_cat = case_when(treat==0 ~ 'Non-vaccinated',
+                  treat==1 ~ 'Vaccinated',
+                  TRUE ~ NA_character_),
+age_cat = case_when(age < 60 ~ '< 60',
+                    age >= 60 ~ '> 60',
+                  TRUE ~ NA_character_),
+
+age_cat_3 = case_when(age < 40 ~ '< 40',
+                  between(age,40,59.9999999) ~ '[40,60[',
+                  age >= 60 ~ '> 60',
+                  TRUE ~ NA_character_),
+
+age_cat_ordered = factor(age_cat_3, ordered = TRUE, levels = c('< 40','[40,60[', '> 60'), labels = c('< 40 ','[40,60[', '> 60')),
+age_cat_char = relevel(as.factor(age_cat), ref = '< 60'),
+
+
+age_bin = ifelse(age < 40, 0, 1),
+bmi_cat = case_when(bmi < 30 ~ '< 30',
+                  bmi >= 30 ~ '>= 30',
+                  TRUE ~ NA_character_),
+bmi_cat3 = case_when(bmi < 20 ~ 'Underweight',
+                  between(bmi,20,25) ~ 'Normal',
+                  between(bmi,25.01,29.999) ~ 'Overweight',
+                  bmi >= 30 ~ 'Obeise',
+                  TRUE ~ NA_character_),
+
+
+
+comorbid_num = if_else(asthma == 1 | ckd==1 | diabetes ==1 | heart_disease ==1 | hypertension ==1 | immunodeficiencies ==1 | neoplasm==1 | respiratory_diseases ==1 | transplanted ==1, 1, 0),
+number_comorbid_num = asthma + ckd + diabetes + heart_disease + hypertension  + immunodeficiencies + neoplasm + respiratory_diseases + transplanted,
+number_comorbid_cat3 = case_when(number_comorbid_num <= 0 ~ '0',
+                                 number_comorbid_num == 1 ~ '1',
+                                 number_comorbid_num > 1 ~ '>= 2',
+                                 TRUE ~ NA_character_),
+commorbid_cat = if_else(comorbid_num == 1, 'with comorbidity', 'without commorbidity'),
+
+number_comorbid_cat3 = factor(number_comorbid_cat3, ordered = TRUE, levels = c("0","1",">= 2"), labels = c("0","1",">= 2")),
+
+nationality_cat = classification,
+
+nationality_cat_3cat = case_when(nationality_cat %in% c("Middle_Eastern_Arabs") ~ "Arab", nationality_cat %in% c("Asian") ~ "Asian" ,TRUE ~'Other'),
+
+nationality_bin = if_else(nationality_cat %in% c("Middle_Eastern_Arabs"), 1, 0),
+nationality_bin_cat = factor(nationality_bin, levels = c("1","0"), labels = c("Arab", "Others")),
+
+event_hosp_cat = case_when(cens_admission ==0  ~ 'Non-hospitalised',
+                                 cens_admission == 1 ~ 'Hospitalised',
+                                 TRUE ~ NA_character_),
+event_hosp_cat = factor(event_hosp_cat, ordered = TRUE, levels = c("Hospitalised","Non-hospitalised"), labels = c("Hospitalised","Non-hospitalised")),
+
+event_crit_cat = case_when(cens_critical ==0  ~ 'Non-critical',
+                                 cens_critical == 1 ~ 'Critical',
+                                 TRUE ~ NA_character_),
+event_crit_cat = factor(event_crit_cat, ordered = TRUE, levels = c("Critical","Non-critical"), labels = c("Critical","Non-critical")),
+
+event_death_cat = case_when(cens_death ==0  ~ 'Alive',
+                                 cens_death == 1 ~ 'Died',
+                                 TRUE ~ NA_character_),
+event_death_cat = factor(event_death_cat, ordered = TRUE, levels = c("Died","Alive"), labels = c("Died","Alive")),
+
+month_period = month(baseline_date),
+month_period_fac = factor(paste(year(baseline_date), month(baseline_date), sep = "_")),
+#month_period = factor(month_period),
+month_period_bin = case_when(month_period  %in% 1:6  ~ 1,
+                                 month_period %in% c(7,10,11,12)  ~ 0,
+                                 TRUE ~ NA_real_),
+
+
+
+month_period_cat = case_when( month_period  %in% c(10, 11, 12)  ~ '[10,12]',
+                              month_period  %in% c(1:5)  ~ '[1,4]',
+                                 month_period %in% c(5,6,7)  ~ '[5,7]',
+                                 TRUE ~ NA_character_),
+
+transition_vaccine = if_else(is.na(transition_vaccine) | transition_vaccine ==0, 0,1),
+transition_vaccine_outcome = if_else(is.na(transition_vaccine_outcome) | transition_vaccine_outcome ==0, 0,1),
+
+
+  gender_cat = factor(gender),
+  gender_cat = relevel(gender_cat, ref = '0'),
+  commorbid_cat = factor(commorbid_cat),
+  commorbid_cat = relevel(commorbid_cat, ref = 'without commorbidity'),
+  nationality_bin_cat = factor(nationality_bin_cat),
+  nationality_bin_cat = relevel(nationality_bin_cat, ref = 'Arab'),
+  month_period_cat = factor(month_period_cat),
+  month_period_cat = relevel(month_period_cat, ref = '[10,12]'),
+
+#Add reference categories for char variables#
+  gender_char = factor(ifelse(gender == 1, "Female", "Male"))
+  
+)
+
+df_total = df %>% filter(age >= 18)
+
+
+#Removals and Keeping#
+
+
+
+#1. vaccinated with window >= 15 days
+sub_incl = df_total %>% filter(treat==1 & between(as.numeric(ymd(dose2_date) - ymd(dose1_date)), 15,1000000)) %>% pull(match_id)
+df_total_all = df_total %>% filter(match_id %in% sub_incl)
+
+#2. vaccinated and unvaccinated with history of hospitalization prior to baseline:
+ match_exclude = df_total_all %>% filter(PID %in% df_remove$PID) %>% pull(match_id) 
+
+df_total_all = df_total_all %>% filter(!(match_id %in% match_exclude))  
+
+#3. unvaccinated post-baseline:
+sub_remove = df_total_all %>% filter(transition_vaccine_outcome ==1) %>% pull(match_id)
+df_total_all = df_total_all %>% filter(!(match_id %in% sub_remove))
+
+df_exclude = df_total_all %>% filter(PID %in% df_remove$PID)
+
+match_exclude = df_exclude %>% pull(match_id) 
+
+df_total_all = df_total_all %>% filter(!(match_id %in% match_exclude))  
+
+memory.limit(42000)
+
+```
+
+
+
+```{r}
+cut_off = I(90 - 14)
+cutoff_time_var = 57
+```
+
+
+```{r}
+df_total = df_total_all %>% mutate (
+  cens_admission_cutoff = case_when(tte_admission >= cut_off ~ 0,
+                                    tte_admission < cut_off & cens_admission %in% 0 ~ 0,
+                                    tte_admission < cut_off & cens_admission %in% 1 ~ 1,
+                                    TRUE ~ NA_real_),
+  
+  cens_critical_cutoff = case_when(tte_critical >= cut_off ~ 0,
+                                   tte_critical < cut_off & cens_critical == 0 ~ 0,
+                                   tte_critical < cut_off & cens_critical == 1 ~ 1,
+                                   TRUE ~ NA_real_),
+  cens_death_cutoff = case_when(tte_death >= cut_off ~ 0,
+                                tte_death < cut_off & cens_death == 0 ~ 0,
+                                tte_death < cut_off & cens_death == 1 ~ 1,
+                                TRUE ~ NA_real_),
+  
+  tte_admission_cutoff = ifelse(tte_admission >= cut_off, cut_off, tte_admission),
+  tte_critical_cutoff = ifelse(tte_critical >= cut_off, cut_off, tte_critical),
+  tte_death_cutoff = ifelse(tte_death >= cut_off, cut_off, tte_death )
+)
+df_total = df_total %>% select(-c(cens_admission, cens_critical, cens_death, tte_admission,tte_critical,tte_death )) 
+df_total = df_total %>% rename(cens_admission = cens_admission_cutoff,cens_critical =  cens_critical_cutoff, cens_death = cens_death_cutoff, tte_admission = tte_admission_cutoff,tte_critical =  tte_critical_cutoff, tte_death = tte_death_cutoff)
+
+df_total  = df_total %>% mutate(
+      #add char variables for tables#
+
+  cens_admission_char = factor(ifelse(cens_admission==0, "Non-hospitalised", "Hospitalised")),
+  cens_admission_char = relevel(cens_admission_char, ref = "Hospitalised"),
+  cens_critical_char = factor(ifelse(cens_critical==0, "Non-critical", "Critical")),
+  cens_critical_char = relevel(cens_critical_char, ref = "Critical"),
+  cens_death_char = factor(ifelse(cens_death==0, "Alive", "Died")),
+  cens_death_char = relevel(cens_death_char, ref = "Died")
+                               )
+
+
+
+```
+
+# Demographic and mobidity data
+
+```{r}
+theme_gtsummary_journal(journal = "jama")
+theme_gtsummary_compact()
+df.test = df_total %>% select(treat_cat, age, age_cat, age_cat_ordered, gender_char, nationality_cat, nationality_cat_3cat, nationality_bin_cat, asthma, ckd, diabetes, heart_disease, hypertension, immunodeficiencies, neoplasm, respiratory_diseases, transplanted, comorbid_num, number_comorbid_cat3, month_period_cat, month_period_fac)
+
+df.test %>% tbl_summary(by = treat_cat,
+                        #statistic = list(all_continuous() ~ "{mean} ({sd})",
+                        #all_categorical() ~ "{n} ({p}%)"),
+                        #digits = list(all_continuous() ~ 2,all_categorical() ~ 2),
+                        missing_text = "(Missing)"
+                        ) %>% add_p() %>% bold_labels() %>% add_overall() %>% as_gt() %>%
+  tab_options(
+    table.width = pct(90)
+  )
+
+```
+
+# Distribution of month period
+
+```{r}
+tabyl(df_total, month_period_cat)
+
+```
+
+# KM curves for Covid-19 outcomes
+
+```{r}
+#Admission#
+df_curr_admission = df_total %>% rename(tte = tte_admission, cens = cens_admission) %>% filter(tte > 0 & !is.na(tte)) 
+df_curr_admission = df_curr_admission %>% mutate(cens_cat = if_else(cens==0,"Non-hospitalised", "Hospitalised"), treat_cat = if_else(treat==0,"Non-vaccinated", "Vaccinated"))
+df_curr_admission = df_curr_admission %>% mutate(treat_cat = as.factor(treat_cat))
+
+fit <- survfit(Surv(tte, cens) ~ treat_cat,  data = df_curr_admission)
+
+x_max = 80
+y_max = 0.004
+p_admission = ggsurvplot(
+  fit,                     # survfit object with calculated statistics.
+  fun = "event",
+  censor = TRUE,
+  surv.scale = "percent",
+  pval = TRUE,             # show p-value of log-rank test.
+  #color = c("blue", "red"),
+  conf.int = TRUE,         # show confidence intervals for  point estimaes of survival curves.
+  conf.int.style = "ribbon",  # customize style of confidence intervals
+  #conf.int.fill = c("lightblue","lightred"),
+  ylab = "",   # customize y axis label.
+  xlab = "",   # customize X axis label.
+  break.time.by = 10,     # break X axis in time intervals by 200.
+  ggtheme = theme_bw(), # customize plot and risk table with a theme.
+  risk.table = "absolute",  # absolute number and percentage at risk.
+  risk.table.height = 0.2,
+  
+  #risk.table.y.text = FALSE,# show bars instead of names in text annotations
+  risk.table.y.text.col = F,# colour risk table text annotations.
+  risk.table.title = "",# show bars instead of names in text annotations
+  ylim = c(0,y_max),
+  xlim = c(0,x_max),
+  tables.theme = theme_cleantable(),
+  ncensor.plot.title = "",
+  risk.table.fontsize = 3.15,
+  legend = "none"
+  
+)
+p_admission$plot = p_admission$plot +
+  theme(axis.text.y = element_text(size = 9, color = "black"),
+        axis.text.x = element_text(size = 9, color = "black"))
+
+p_admission$table <- p_admission$table + 
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+    )
+
+rm(fit)
+#Critical#
+df_curr_crit = df_total %>% rename(tte = tte_critical, cens = cens_critical) %>% filter(tte > 0 & !is.na(tte)) 
+df_curr_crit = df_curr_crit %>% mutate(cens_cat = if_else(cens==0,"Non-critical", "Critical"), treat_cat = if_else(treat==0,"Non-vaccinated", "Vaccinated"))
+df_curr_crit = df_curr_crit %>% mutate(treat_cat = as.factor(treat_cat))
+
+fit <- survfit(Surv(tte, cens) ~ treat_cat,  data = df_curr_crit)
+y_max = 0.001
+p_critical = ggsurvplot(
+   fit,                     # survfit object with calculated statistics.
+  fun = "event",
+  censor = TRUE,
+  surv.scale = "percent",
+  pval = TRUE,             # show p-value of log-rank test.
+  #color = c("blue", "red"),
+  conf.int = TRUE,         # show confidence intervals for  point estimaes of survival curves.
+  conf.int.style = "ribbon",  # customize style of confidence intervals
+  #conf.int.fill = c("lightblue","lightred"),
+  ylab = "",   # customize y axis label.
+  xlab = "",   # customize X axis label.
+  break.time.by = 10,     # break X axis in time intervals by 200.
+  ggtheme = theme_bw(), # customize plot and risk table with a theme.
+  risk.table = "absolute",  # absolute number and percentage at risk.
+  risk.table.height = 0.2,
+  
+  #risk.table.y.text = FALSE,# show bars instead of names in text annotations
+  risk.table.y.text.col = F,# colour risk table text annotations.
+  risk.table.title = "",# show bars instead of names in text annotations
+  ylim = c(0,y_max),
+  xlim = c(0,x_max),
+  tables.theme = theme_cleantable(),
+  ncensor.plot.title = "",
+  risk.table.fontsize = 3.15,
+  legend = "none"
+  
+)
+p_critical$plot = p_critical$plot +
+  theme(axis.text.y = element_text(size = 9, color = "black"),
+        axis.text.x = element_text(size = 9, color = "black"))
+
+p_critical$table <- p_critical$table + 
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+    )
+rm(fit)
+
+#Death#
+df_curr_death = df_total %>% rename(tte = tte_death, cens = cens_death) %>% filter(tte > 0 & !is.na(tte)) 
+df_curr_death = df_curr_death %>% mutate(cens_cat = if_else(cens==0,"Alive", "death"), treat_cat = if_else(treat==0,"Non-vaccinated", "Vaccinated"))
+
+df_curr_death = df_curr_death %>% mutate(treat_cat = as.factor(treat_cat))
+fit <- survfit(Surv(tte, cens) ~ treat_cat,  data = df_curr_death)
+y_max = 0.00015
+p_death = ggsurvplot(
+   fit,                     # survfit object with calculated statistics.
+  fun = "event",
+  censor = TRUE,
+  surv.scale = "percent",
+  pval = TRUE,             # show p-value of log-rank test.
+  #color = c("blue", "red"),
+  conf.int = TRUE,         # show confidence intervals for  point estimaes of survival curves.
+  conf.int.style = "ribbon",  # customize style of confidence intervals
+  #conf.int.fill = c("lightblue","lightred"),
+  ylab = "",   # customize y axis label.
+  xlab = "",   # customize X axis label.
+  break.time.by = 10,     # break X axis in time intervals by 200.
+  ggtheme = theme_bw(), # customize plot and risk table with a theme.
+  risk.table = "absolute",  # absolute number and percentage at risk.
+  risk.table.height = 0.2,
+  
+  #risk.table.y.text = FALSE,# show bars instead of names in text annotations
+  risk.table.y.text.col = F,# colour risk table text annotations.
+  risk.table.title = "",# show bars instead of names in text annotations
+  ylim = c(0,y_max),
+  xlim = c(0,x_max),
+  tables.theme = theme_cleantable(),
+  ncensor.plot.title = "",
+  risk.table.fontsize = 3.15,
+  legend = "none"
+  
+)
+p_death$plot = p_death$plot +
+  theme(axis.text.y = element_text(size = 9, color = "black"),
+        axis.text.x = element_text(size = 9, color = "black"))
+
+p_death$table <- p_death$table + 
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+    )
+rm(fit)
+
+
+                          
+
+```
+
+
+
+
+# Outcomes according to risk factors and vaccine status
+```{r}
+
+a_admission = df_total %>%
+  select(treat_cat, cens_admission_char, age_cat_char, age_cat_ordered,  gender_char, commorbid_cat, nationality_cat_3cat, nationality_bin_cat, month_period_cat) %>%
+   tbl_strata(
+    strata = treat_cat, 
+    ~.x %>%
+      tbl_summary(by = cens_admission_char, missing = "no", percent = "row")
+         )
+
+a_admission = a_admission %>% modify_header(update = list(
+ stat_1_1 ~ '**Non-vaccinated, Hospitalised**',
+ stat_2_1 ~ '**Non-vaccinated, Non-Hospitalised**',
+ stat_1_2 ~ '**Vaccinated, Hospitalised**',
+ stat_2_2 ~ '**Vaccinated, Non-Hospitalised**'
+ ))
+
+a_critical = df_total %>%
+  select(treat_cat, cens_critical_char, age_cat_char,  age_cat_ordered,  gender_char, commorbid_cat, nationality_cat_3cat, nationality_bin_cat,  month_period_cat) %>%
+  tbl_strata(
+    strata = treat_cat, 
+    ~.x %>%
+      tbl_summary(by = cens_critical_char, missing = "no", percent = "row") 
+  )
+
+a_critical = a_critical %>% modify_header(update = list(
+  stat_1_1 ~ '**Non-vaccinated, Critical**',
+  stat_2_1 ~ '**Non-vaccinated, Non-Critical**',
+  stat_1_2 ~ '**Vaccinated, Critical**',
+  stat_2_2 ~ '**Vaccinated, Non-Critical**'
+))
+
+
+a_death = df_total %>%
+  select(treat_cat, cens_death_char, age_cat_char, age_cat_ordered,  gender_char, commorbid_cat, nationality_cat_3cat, nationality_bin_cat, month_period_cat) %>%
+  tbl_strata(
+    strata = treat_cat, 
+    ~.x %>%
+      tbl_summary(by = cens_death_char, missing = "no", percent = "row")
+  )
+
+a_death = a_death %>% modify_header(update = list(
+  stat_1_1 ~ '**Non-vaccinated, Died**',
+  stat_2_1 ~ '**Non-vaccinated, Alive**',
+  stat_1_2 ~ '**Vaccinated, Died**',
+  stat_2_2 ~ '**Vaccinated, Alive**'
+))
+
+theme_gtsummary_compact()
+tbl_merge(
+  list(a_admission, a_critical, a_death),
+  tab_spanner = c("**Hospitalisation**", "**Critical admission**", "**Death**")
+) %>% bold_labels() %>%
+  as_gt() %>%
+  tab_options(
+    table.width = pct(90)
+  )
+
+```
+
+
+
+
+
+# Standard Cox PH model fit results
+
+```{r}
+#Admission#
+df_curr_admission = df_total %>% rename(tte = tte_admission, cens = cens_admission) %>% filter(tte > 0 & !is.na(tte)) 
+df_curr_admission = df_curr_admission %>% mutate(cens_cat = if_else(cens==0,"Non-hospitalised", "Hospitalised"), treat_cat = if_else(treat==0,"Non-vaccinated", "Vaccinated"))
+df_curr_admission = df_curr_admission %>% mutate(
+  gender_cat = factor(gender),
+  gender_cat = relevel(gender_cat, ref = '0'),
+  commorbid_cat = factor(commorbid_cat),
+  commorbid_cat = relevel(commorbid_cat, ref = 'without commorbidity'),
+  nationality_bin_cat = factor(nationality_bin_cat),
+   nationality_bin_cat = relevel(nationality_bin_cat, ref = 'Arab')
+)
+
+#Critical#
+df_curr_crit = df_total %>% rename(tte = tte_critical, cens = cens_critical) %>% filter(tte > 0 & !is.na(tte)) 
+df_curr_crit = df_curr_crit %>% mutate(cens_cat = if_else(cens==0,"Non-critical", "Critical"), treat_cat = if_else(treat==0,"Non-vaccinated", "Vaccinated"))
+df_curr_crit = df_curr_crit %>% mutate(
+  gender_cat = factor(gender),
+  gender_cat = relevel(gender_cat, ref = '0'),
+  commorbid_cat = factor(commorbid_cat),
+  commorbid_cat = relevel(commorbid_cat, ref = 'without commorbidity'),
+  nationality_bin_cat = factor(nationality_bin_cat),
+   nationality_bin_cat = relevel(nationality_bin_cat, ref = 'Arab')
+)
+
+#Death#
+df_curr_death = df_total %>% rename(tte = tte_death, cens = cens_death) %>% filter(tte > 0 & !is.na(tte)) 
+df_curr_death = df_curr_death %>% mutate(cens_cat = if_else(cens==0,"Alive", "death"), treat_cat = if_else(treat==0,"Non-vaccinated", "Vaccinated"))
+df_curr_death = df_curr_death %>% mutate(
+ gender_cat = factor(gender),
+  gender_cat = relevel(gender_cat, ref = '0'),
+  commorbid_cat = factor(commorbid_cat),
+  commorbid_cat = relevel(commorbid_cat, ref = 'without commorbidity'),
+  nationality_bin_cat = factor(nationality_bin_cat),
+   nationality_bin_cat = relevel(nationality_bin_cat, ref = 'Arab')
+)
+
+#Fit and create a table for standard Cox PH model#
+gt_r1 <- coxph(Surv(tte, cens) ~ treat_cat + commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE) %>% add_global_p() %>% add_nevent(location = "level")
+gt_r2 <- coxph(Surv(tte, cens) ~ treat_cat + commorbid_cat  + age_cat_char +  gender_cat  + nationality_bin_cat + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE) %>% add_global_p()  %>% add_nevent(location = "level")
+gt_r3 <- coxph(Surv(tte, cens) ~ treat_cat + commorbid_cat + age_cat_char +  gender_cat  + nationality_bin_cat + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE) %>% add_global_p()  %>% add_nevent(location = "level")
+gt_t1 <- df_curr_admission[c("treat_cat", "age_cat_char", "gender_cat" , "commorbid_cat", "nationality_bin_cat", "month_period_cat")] %>% 
+  tbl_summary(missing = "no") %>% 
+  add_n()  %>% 
+  modify_header(stat_0 ~ "**n (%)**") %>%
+  modify_footnote(stat_0 ~ NA_character_)
+
+
+theme_gtsummary_compact()
+tbl_merge(
+  list(gt_t1, gt_r1, gt_r2, gt_r3 ),
+  tab_spanner = c(NA_character_,  "**Hospitalisation**", "**Critical admission**", "**Death**")
+) %>% bold_labels() %>%
+  as_gt() %>%
+  tab_options(
+    table.width = pct(150)
+  )
+
+
+
+```
+
+
+# Overall Effectiveness
+
+```{r}
+reset_gtsummary_theme()
+gt_r1 <- coxph(Surv(tte, cens) ~ treat_cat + commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include = c("treat_cat")) %>% add_global_p() %>% add_nevent(location = "level")
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp1$table_body$estimate[3] = round(100*(1 - temp1$table_body$estimate[3]),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low[3]),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high[3]),1)
+temp1$table_body$ci[3] = paste(conf.low1,",", conf.high1)
+
+
+gt_r2 <- coxph(Surv(tte, cens) ~ treat_cat + commorbid_cat  + age_cat_char +  gender_cat  + nationality_bin_cat + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include = c("treat_cat")) %>% add_global_p()  %>% add_nevent(location = "level")
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$estimate[3] = round(100*(1 - temp2$table_body$estimate[3]),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low[3]),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high[3]),1)
+temp2$table_body$ci[3] = paste(conf.low1,",", conf.high1)
+
+
+gt_r3 <- coxph(Surv(tte, cens) ~ treat_cat + commorbid_cat  + age_cat_char +  gender_cat  + nationality_bin_cat + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include = c("treat_cat")) %>% add_global_p()  %>% add_nevent(location = "level")
+temp3 = gt_r3 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp3$table_body$estimate[3] = round(100*(1 - temp3$table_body$estimate[3]),1)
+conf.high1 = round(100*(1 - temp3$table_body$conf.low[3]),1)
+conf.low1 = round(100*(1 - temp3$table_body$conf.high[3]),1)
+temp3$table_body$ci[3] = paste(conf.low1,",", conf.high1)
+
+
+gt_t1 <- df_curr_admission[c("treat_cat")] %>% 
+  tbl_summary(missing = "no") %>% 
+  add_n()  %>% 
+  modify_header(stat_0 ~ "**n (%)**") %>%
+  modify_footnote(stat_0 ~ NA_character_)
+
+theme_gtsummary_compact()
+tbl_merge(
+  list(gt_t1, temp1, temp2, temp3),
+  tab_spanner = c(NA_character_,  "**Hospitalisation**", "**Critical admission**", "**Death**")
+) %>% as_gt() %>%
+  tab_options(
+    table.width = pct(150)
+  )
+```
+
+
+# Testing interactions between treatment and different risk factors 
+
+## Admission
+
+```{r}
+#Admission#
+
+fm.temp1 <- coxph(Surv(tte, cens) ~ treat*commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission)
+tidy(fm.temp1, exponentiate = FALSE)
+fm.temp2 <- coxph(Surv(tte, cens) ~ treat*age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission)
+tidy(fm.temp2, exponentiate = FALSE)
+fm.temp3 <- coxph(Surv(tte, cens) ~ treat*gender_cat + age_cat_char + commorbid_cat  +  nationality_bin_cat + month_period_cat, data = df_curr_admission)
+tidy(fm.temp3, exponentiate = FALSE)
+fm.temp4 <- coxph(Surv(tte, cens) ~ treat*nationality_bin_cat + gender_cat + age_cat_char + commorbid_cat + month_period_cat, data = df_curr_admission)
+tidy(fm.temp4, exponentiate = FALSE)
+fm.temp5 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + nationality_bin_cat + gender_cat + age_cat_char + commorbid_cat, data = df_curr_admission)
+tidy(fm.temp5, exponentiate = FALSE)
+rm(fm.temp1); rm(fm.temp2);rm(fm.temp3);rm(fm.temp4);rm(fm.temp5)
+```
+
+## Critical
+
+```{r}
+
+fm.temp1 <- coxph(Surv(tte, cens) ~ treat*commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_crit)
+tidy(fm.temp1, exponentiate = FALSE)
+fm.temp2 <- coxph(Surv(tte, cens) ~ treat*age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_crit)
+tidy(fm.temp2, exponentiate = FALSE)
+fm.temp3 <- coxph(Surv(tte, cens) ~ treat*gender_cat + age_cat_char + commorbid_cat  +  nationality_bin_cat + month_period_cat, data = df_curr_crit)
+tidy(fm.temp3, exponentiate = FALSE)
+fm.temp4 <- coxph(Surv(tte, cens) ~ treat*nationality_bin_cat + gender_cat + age_cat_char + commorbid_cat + month_period_cat, data = df_curr_crit)
+tidy(fm.temp4, exponentiate = FALSE)
+fm.temp5 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + nationality_bin_cat + gender_cat + age_cat_char + commorbid_cat, data = df_curr_crit)
+tidy(fm.temp5, exponentiate = FALSE)
+rm(fm.temp1); rm(fm.temp2);rm(fm.temp3);rm(fm.temp4);rm(fm.temp5)
+
+```
+
+## Death
+
+```{r}
+fm.temp1 <- coxph(Surv(tte, cens) ~ treat*commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_death)
+tidy(fm.temp1, exponentiate = FALSE)
+fm.temp2 <- coxph(Surv(tte, cens) ~ treat*age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_death)
+tidy(fm.temp2, exponentiate = FALSE)
+fm.temp3 <- coxph(Surv(tte, cens) ~ treat*gender_cat + age_cat_char + commorbid_cat  +  nationality_bin_cat + month_period_cat, data = df_curr_death)
+tidy(fm.temp3, exponentiate = FALSE)
+fm.temp4 <- coxph(Surv(tte, cens) ~ treat*nationality_bin_cat + gender_cat + age_cat_char + commorbid_cat + month_period_cat, data = df_curr_death)
+tidy(fm.temp4, exponentiate = FALSE)
+fm.temp5 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + nationality_bin_cat + gender_cat + age_cat_char + commorbid_cat, data = df_curr_death)
+tidy(fm.temp5, exponentiate = FALSE)
+rm(fm.temp1); rm(fm.temp2);rm(fm.temp3);rm(fm.temp4);rm(fm.temp5)
+
+```
+
+
+# Effectiveness according to risk factors 
+
+```{r longest}
+
+#########################
+#A. Outcome = Admission##
+#########################
+
+###################
+#A.1. Commorbidity#
+###################
+reset_gtsummary_theme()
+ref1 = "without commorbidity"
+df_curr_admission$commorbid_cat = relevel(df_curr_admission$commorbid_cat, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat")) 
+
+temp1 = gt_r1 %>% modify_header(
+     update = list(estimate ~ "**Effectiveness (%)**")
+                           )
+
+temp1$table_body$label = ref1
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "with comorbidity"
+df_curr_admission$commorbid_cat = relevel(df_curr_admission$commorbid_cat, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+     update = list(estimate ~ "**Effectiveness (%)**")
+                           )
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_comorbid = tbl_stack(list(temp1, temp2)) 
+
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2)
+
+###################
+#A.2. Age         #
+###################
+
+
+ref1 = "< 60"
+df_curr_admission$age_cat_char = relevel(df_curr_admission$age_cat_char, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+     update = list(estimate ~ "**Effectiveness (%)**")
+                           )
+temp1$table_body$label = ref1 
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "> 60"
+df_curr_admission$age_cat_char = relevel(df_curr_admission$age_cat_char, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+     update = list(estimate ~ "**Effectiveness (%)**")
+                           )
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+
+
+#Merge all#
+a_age = tbl_stack(list(temp1, temp2)) 
+
+
+###################
+#A.3. Gender#######
+###################
+
+df_curr_admission = df_curr_admission %>% mutate(
+                                         gender_char = factor(ifelse(gender == 1, "Female", "Male"))
+                                                 )
+
+
+ref1 = "Female"
+df_curr_admission$gender_char = relevel(df_curr_admission$gender_char, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*gender_char  + age_cat_char +  commorbid_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+
+temp1$table_body$label = ref1
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "Male"
+df_curr_admission$gender_char = relevel(df_curr_admission$gender_char, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*gender_char  + age_cat_char +  commorbid_cat +   nationality_bin_cat + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_gender = tbl_stack(list(temp1, temp2)) 
+
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2)
+
+
+###################
+#A.4. Ethnicicty  #
+###################
+
+
+ref1 = "Arab"
+df_curr_admission$nationality_bin_cat = relevel(df_curr_admission$nationality_bin_cat, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*nationality_bin_cat + commorbid_cat  +  gender_cat +   age_cat_char + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp1$table_body$label = ref1 
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "Others"
+df_curr_admission$nationality_bin_cat = relevel(df_curr_admission$nationality_bin_cat, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*nationality_bin_cat + commorbid_cat  +  gender_cat +   age_cat_char + month_period_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+#Merge all#
+a_nationality = tbl_stack(list(temp1, temp2)) 
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2)
+
+###################
+#A.5. Month period#
+###################
+
+
+ref1 = "[10,12]"
+df_curr_admission$month_period_cat = relevel(df_curr_admission$month_period_cat, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp1$table_body$label = ref1 
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "[1,4]"
+df_curr_admission$month_period_cat = relevel(df_curr_admission$month_period_cat, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat , data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "[5,7]"
+df_curr_admission$month_period_cat = relevel(df_curr_admission$month_period_cat, ref = ref1)
+gt_r3 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat, data = df_curr_admission) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp3 = gt_r3 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp3$table_body$label = ref1
+temp3$table_body$estimate = round(100*(1 - temp3$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp3$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp3$table_body$conf.high),1)
+temp3$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_period = tbl_stack(list(temp1, temp2, temp3)) 
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2); rm(temp3)
+
+#Merge all#
+result_admission = tbl_stack(list(a_gender, a_age, a_nationality, a_comorbid, a_period)) 
+
+rm(a_gender); rm(a_age); rm(a_nationality); rm(a_comorbid); rm(a_period)
+
+#########################
+#B. Outcome = Critical##
+#########################
+
+###################
+#A.1. Commorbidity#
+###################
+
+ref1 = "without commorbidity"
+df_curr_crit$commorbid_cat = relevel(df_curr_crit$commorbid_cat, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+
+temp1$table_body$label = ref1
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "with comorbidity"
+df_curr_crit$commorbid_cat = relevel(df_curr_crit$commorbid_cat, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_comorbid = tbl_stack(list(temp1, temp2)) 
+
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2)
+
+###################
+#A.2. Age         #
+###################
+
+
+ref1 = "< 60"
+df_curr_crit$age_cat_char = relevel(df_curr_crit$age_cat_char, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp1$table_body$label = ref1 
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "> 60"
+df_curr_crit$age_cat_char = relevel(df_curr_crit$age_cat_char, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_age = tbl_stack(list(temp1, temp2)) 
+
+
+###################
+#A.3. Gender#######
+###################
+
+df_curr_crit = df_curr_crit %>% mutate(
+  gender_char = factor(ifelse(gender == 1, "Female", "Male"))
+)
+
+
+ref1 = "Female"
+df_curr_crit$gender_char = relevel(df_curr_crit$gender_char, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*gender_char  + age_cat_char +  commorbid_cat +   nationality_bin_cat + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+
+temp1$table_body$label = ref1
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "Male"
+df_curr_crit$gender_char = relevel(df_curr_crit$gender_char, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*gender_char  + age_cat_char +  commorbid_cat +   nationality_bin_cat + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_gender = tbl_stack(list(temp1, temp2)) 
+
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2)
+
+
+###################
+#A.4. Ethnicicty  #
+###################
+
+
+ref1 = "Arab"
+df_curr_crit$nationality_bin_cat = relevel(df_curr_crit$nationality_bin_cat, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*nationality_bin_cat + commorbid_cat  +  gender_cat +   age_cat_char + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp1$table_body$label = ref1 
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "Others"
+df_curr_crit$nationality_bin_cat = relevel(df_curr_crit$nationality_bin_cat, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*nationality_bin_cat + commorbid_cat  +  gender_cat +   age_cat_char + month_period_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_nationality = tbl_stack(list(temp1, temp2)) 
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2)
+
+###################
+#A.5. Month period#
+###################
+
+ref1 = "[10,12]"
+df_curr_crit$month_period_cat = relevel(df_curr_crit$month_period_cat, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp1$table_body$label = ref1 
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "[1,4]"
+df_curr_crit$month_period_cat = relevel(df_curr_crit$month_period_cat, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat , data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "[5,7]"
+df_curr_crit$month_period_cat = relevel(df_curr_crit$month_period_cat, ref = ref1)
+gt_r3 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat, data = df_curr_crit) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp3 = gt_r3 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp3$table_body$label = ref1
+temp3$table_body$estimate = round(100*(1 - temp3$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp3$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp3$table_body$conf.high),1)
+temp3$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_period = tbl_stack(list(temp1, temp2, temp3)) 
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2); rm(temp3)
+
+#Merge all#
+result_critical = tbl_stack(list(a_gender, a_age, a_nationality, a_comorbid, a_period)) 
+
+rm(a_gender); rm(a_age); rm(a_nationality); rm(a_comorbid); rm(a_period)
+
+#########################
+#B. Outcome = Death##
+#########################
+
+###################
+#A.1. Commorbidity#
+###################
+
+ref1 = "without commorbidity"
+df_curr_death$commorbid_cat = relevel(df_curr_death$commorbid_cat, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+
+temp1$table_body$label = ref1
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "with comorbidity"
+df_curr_death$commorbid_cat = relevel(df_curr_death$commorbid_cat, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*commorbid_cat  + age_cat_char +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_comorbid = tbl_stack(list(temp1, temp2)) 
+
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2)
+
+###################
+#A.2. Age         #
+###################
+
+
+ref1 = "< 60"
+df_curr_death$age_cat_char = relevel(df_curr_death$age_cat_char, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp1$table_body$label = ref1 
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "> 60"
+df_curr_death$age_cat_char = relevel(df_curr_death$age_cat_char, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+#Merge all#
+a_age = tbl_stack(list(temp1, temp2)) 
+
+
+###################
+#A.3. Gender#######
+###################
+
+df_curr_death = df_curr_death %>% mutate(
+  gender_char = factor(ifelse(gender == 1, "Female", "Male"))
+)
+
+
+ref1 = "Female"
+df_curr_death$gender_char = relevel(df_curr_death$gender_char, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*gender_char  + age_cat_char +  commorbid_cat +   nationality_bin_cat + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+
+temp1$table_body$label = ref1
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "Male"
+df_curr_death$gender_char = relevel(df_curr_death$gender_char, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*gender_char  + age_cat_char +  commorbid_cat +   nationality_bin_cat + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_gender = tbl_stack(list(temp1, temp2)) 
+
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2)
+
+
+###################
+#A.4. Ethnicicty  #
+###################
+
+
+ref1 = "Arab"
+df_curr_death$nationality_bin_cat = relevel(df_curr_death$nationality_bin_cat, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*nationality_bin_cat + commorbid_cat  +  gender_cat +   age_cat_char + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp1$table_body$label = ref1 
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "Others"
+df_curr_death$nationality_bin_cat = relevel(df_curr_death$nationality_bin_cat, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*nationality_bin_cat + commorbid_cat  +  gender_cat +   age_cat_char + month_period_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_nationality = tbl_stack(list(temp1, temp2)) 
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2)
+
+###################
+#A.5. Month period#
+###################
+
+
+ref1 = "[10,12]"
+df_curr_death$month_period_cat = relevel(df_curr_death$month_period_cat, ref = ref1)
+gt_r1 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp1 = gt_r1 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp1$table_body$label = ref1 
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "[1,4]"
+df_curr_death$month_period_cat = relevel(df_curr_death$month_period_cat, ref = ref1)
+gt_r2 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat , data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp2 = gt_r2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$label = ref1
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+
+ref1 = "[5,7]"
+df_curr_death$month_period_cat = relevel(df_curr_death$month_period_cat, ref = ref1)
+gt_r3 <- coxph(Surv(tte, cens) ~ treat*month_period_cat + age_cat_char + commorbid_cat  +  gender_cat +   nationality_bin_cat, data = df_curr_death) %>%
+  tbl_regression(exponentiate = TRUE, include= c("treat"))
+
+temp3 = gt_r3 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp3$table_body$label = ref1
+temp3$table_body$estimate = round(100*(1 - temp3$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp3$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp3$table_body$conf.high),1)
+temp3$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Merge all#
+a_period = tbl_stack(list(temp1, temp2, temp3)) 
+rm(gt_r1); rm(gt_r2); rm(temp1); rm(temp2); rm(temp3)
+
+#Merge all#
+result_death = tbl_stack(list(a_gender, a_age, a_nationality, a_comorbid, a_period)) 
+
+
+
+theme_gtsummary_compact()
+result = tbl_merge(
+  list(result_admission, result_critical, result_death),
+  tab_spanner = c("**Hospitalisation**", "**Critical admission**", "**Death**")
+) 
+
+result = result %>% as_gt() %>%  
+  gt::tab_row_group(
+    label = "Sex",
+    rows = 1:2)  %>%
+  gt::tab_row_group(
+    label = "Age",
+    rows = 3:4) %>%
+  gt::tab_row_group(
+    label = "Ethnicity",
+    rows = 5:6) %>%
+  gt::tab_row_group(
+    label = "Commorbidity",
+    rows = 7:8) %>%
+  gt::tab_row_group(
+    label = "Months",
+    rows = 9:11) %>% tab_style(
+      style = list(cell_text(weight = "bold")),
+      locations = cells_row_groups()
+    )  %>%
+  tab_options(
+    table.width = pct(150)
+  )
+
+result
+
+```
+
+
+# Effectiveness using time varying coefficients model
+
+```{r}
+
+#Admission to hospital#
+df.split <- survSplit(Surv(tte, cens) ~ ., data= df_curr_admission, cut=c(cutoff_time_var),episode= "tgroup", id="ID")
+a1 = paste0('[0,',cutoff_time_var,']')
+a2 = paste0(cutoff_time_var,'+')
+df.split = df.split %>% mutate(
+  
+  tgroup = ifelse(tgroup==1, a1, a2 )
+)
+
+fit.split <- coxph(Surv(tstart, tte, cens) ~ treat:strata(tgroup) +  age + gender + comorbid_num  + nationality_bin_cat + month_period_cat, data=df.split)
+
+temp1 = fit.split %>% tbl_regression(exponentiate = TRUE, include = c("treat:strata(tgroup)"))
+temp1 = temp1 %>% modify_header(
+     update = list(estimate ~ "**Effectiveness (%)**")
+                           )
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+
+#Critical admission#
+
+df.split <- survSplit(Surv(tte, cens) ~ ., data= df_curr_crit, cut=c(cutoff_time_var),episode= "tgroup", id="ID")
+a1 = paste0('[0,',cutoff_time_var,']')
+a2 = paste0(cutoff_time_var,'+')
+df.split = df.split %>% mutate(
+  
+  tgroup = ifelse(tgroup==1, a1, a2 )
+)
+fit.split <- coxph(Surv(tstart, tte, cens) ~ treat:strata(tgroup) +  age + gender + comorbid_num  + nationality_bin_cat + month_period_cat, data=df.split)
+
+temp2 = fit.split %>% tbl_regression(exponentiate = TRUE, include = c("treat:strata(tgroup)"))
+temp2 = temp2 %>% modify_header(
+  update = list(estimate ~ "**Effectiveness (%)**")
+)
+temp2$table_body$estimate = round(100*(1 - temp2$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp2$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp2$table_body$conf.high),1)
+temp2$table_body$ci = paste(conf.low1,",", conf.high1)
+
+theme_gtsummary_compact()
+tbl_merge(
+  list(temp1, temp2),
+  tab_spanner = c("**Hospitalisation**", "**Critical admission**")
+) %>% as_gt()
+
+
+```
+
+
+# Outcome: Admission to hospital
+
+```{r}
+rm(list = ls()[-match(c("df_total", "cut_off", "cutoff_time_var"), ls())])
+gc()
+outcome_name = "admission"
+```
+
+## Outcome according to vaccination status
+
+```{r}
+df_curr = df_total %>% rename(tte = tte_admission, cens = cens_admission) %>% filter(tte > 0 & !is.na(tte)) 
+df_curr = df_curr %>% mutate(cens_cat = if_else(cens==0,"Non-hospitalised", "Hospitalised"), treat_cat = if_else(treat==0,"Non-vaccinated", "Vaccinated"))
+table(df_curr$treat_cat, df_curr$cens_cat, useNA = "always")
+```
+
+## Median follow-up
+```{r}
+#Using prodlim package#
+df.test = df_curr
+df.test$status0 <- 1- df.test$cens
+km0 <- prodlim(Hist(tte,status0)~treat,data=df.test)
+quantile(km0)
+
+
+```
+
+## Incidence rate
+
+```{r}
+library(epiR)
+df_treat = df_curr[df_curr$treat==1,]
+ncas <- as.numeric(table(df_treat$cens)[2]); ntar <- as.numeric(df_treat %>% summarise(persons_days = sum(tte)))
+tmp <- as.matrix(cbind(ncas, ntar))
+a1 = epi.conf(tmp, ctype = "inc.rate", method = "exact", design = 1, conf.level = 0.95)*1000
+
+df_control = df_curr[df_curr$treat==0,]
+ncas <- as.numeric(table(df_control$cens)[2]); ntar <- as.numeric(df_control %>% summarise(persons_days = sum(tte)))
+tmp <- as.matrix(cbind(ncas, ntar))
+a2 = epi.conf(tmp, ctype = "inc.rate", method = "exact", design = 1, conf.level = 0.95)*1000
+a1
+a2
+
+```
+
+## Survival function according to vaccination status
+
+```{r, fig.height=6, fig.width=10,out.width = "100%",dpi = 100}
+library("survminer")
+x_max = ceiling(max(df_curr$tte))  + 10
+y_max = 0.01
+df_graph = df_curr %>% mutate(treat_cat = as.factor(treat_cat))
+fit2 <- survfit(Surv(tte, cens) ~ treat_cat, data = df_graph)
+#fit <- coxph( Surv(tte, cens) ~ date_from_sep, data = df_graph, ties = "efron" )
+#print(fit)
+
+p = ggsurvplot(
+  fit2,                     # survfit object with calculated statistics.
+  fun = "event",
+  surv.scale = "percent",
+  pval = TRUE,             # show p-value of log-rank test.
+  conf.int = FALSE,         # show confidence intervals for  point estimaes of survival curves.
+  conf.int.style = "step",  # customize style of confidence intervals
+  xlab = "Days since baseline",   # customize X axis label.
+  break.time.by = 30,     # break X axis in time intervals by 200.
+  ggtheme = theme_bw(), # customize plot and risk table with a theme.
+  risk.table = "absolute",  # absolute number and percentage at risk.
+  risk.table.y.text.col = T,# colour risk table text annotations.
+  risk.table.y.text = FALSE,# show bars instead of names in text annotations in legend of risk table.
+  ncensor.plot = TRUE,      # plot the number of censored subjects at time t
+  #surv.median.line = "hv"  # add the median survival pointer.
+  # legend.labs =  c("October", "November/December"),    # change legend labels.
+  
+  # palette =  c("#E7B800", "#2E9FDF"), # custom color palettes.
+  ylim = c(0,y_max),
+  xlim = c(0,x_max),
+  pval.coord = c(100, y_max)
+)
+#p$ncensor.plot <- p$ncensor.plot + scale_y_continuous(breaks = c(0,200, 400))
+p
+```
+
+## Effectiveness without adjustment
+
+```{r}
+
+fm1 <- coxph(Surv(tte, cens) ~ treat, data = df_curr)
+tidy(fm1, exponentiate = TRUE)
+
+a = fm1 |> tidy(conf.int = TRUE, exponentiate = TRUE) |>  select(term, estimate, starts_with("conf")) |> filter(str_detect(term, "^treat"))
+HR1 = round(as.vector(100*(1 - a$estimate)),1)
+HR1.upper = round(as.vector(100*(1 - a$conf.low)),1)
+HR1.lower = round(as.vector(100*(1 - a$conf.high)),1)
+rm(a)
+```
+
+## Effectiveness: Adjusted for covariates
+
+```{r}
+
+fm2 <- coxph(Surv(tte, cens) ~ treat +  age + gender + comorbid_num  + nationality_bin_cat + month_period_cat, data = df_curr)
+tidy(fm2, exponentiate = TRUE)
+
+a = fm2 |> tidy(conf.int = TRUE, exponentiate = TRUE) |>  select(term, estimate, starts_with("conf")) |> filter(str_detect(term, "^treat"))
+HR2 = round(as.vector(100*(1 - a$estimate)),1)
+HR2.upper = round(as.vector(100*(1 - a$conf.low)),1)
+HR2.lower = round(as.vector(100*(1 - a$conf.high)),1)
+
+b = as.data.frame(cbind(outcome = outcome_name, follow_up = cut_off, HR_crude = HR1, HR_crude.lower = HR1.lower,  HR_crude.upper = HR1.upper,  HR_adj = HR2,  HR_adj.lower = HR2.lower,  HR_adj.upper = HR2.upper))
+results_all = as.data.frame(b)
+results_all
+rm(b)
+```
+
+
+
+
+## Standard Cox PH model: Schonfiled residuals
+
+```{r}
+index_non_stra = which(rownames(zph2$table) == "treat")
+plot(zph2[index_non_stra],lwd=2, hr = FALSE, xlab = "Days since full vaccination")
+abline(0,0, col=1,lty=3,lwd=2)
+abline(h= exp(fm2$coef[index_non_stra]), col=3, lwd=2, lty=2)
+HR_non_stra = 100*(1 - exp(fm2$coef[index_non_stra]))
+```
+
+
+## Time varying coefficients model using Step function using coxph package
+
+```{r}
+df.split <- survSplit(Surv(tte, cens) ~ ., data= df_curr, cut=c(cutoff_time_var),episode= "tgroup", id="ID")
+fit.split <- coxph(Surv(tstart, tte, cens) ~ treat:strata(tgroup) +  age + gender + comorbid_num  + nationality_bin_cat + month_period_cat, data=df.split)
+tidy(fit.split, exponentiate = TRUE)
+
+temp1 = fit.split %>% tbl_regression(exponentiate = TRUE, include = c("treat:strata(tgroup)")) 
+temp1 = temp1 %>% modify_header(
+     update = list(estimate ~ "**Effectiveness (%)**")
+                           )
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+theme_gtsummary_compact()
+temp1 %>% as_gt()
+
+```
+
+# Outcome: Critical admission
+
+```{r}
+rm(list = ls()[-match(c("df_total", "cut_off", "cutoff_time_var"), ls())])
+gc()
+outcome_name = "critical"
+```
+
+
+## Outcome according to vaccination status
+
+```{r}
+df_curr = df_total %>% rename(tte = tte_critical, cens = cens_critical) %>% filter(tte > 0 & !is.na(tte)) 
+df_curr = df_curr %>% mutate(cens_cat = if_else(cens==0,"Non-critical", "Critical"), treat_cat = if_else(treat==0,"Non-vaccinated", "Vaccinated"))
+table(df_curr$treat_cat, df_curr$cens_cat, useNA = "always")
+```
+
+## Median follow-up
+```{r}
+#Using prodlim package#
+df.test = df_curr
+df.test$status0 <- 1- df.test$cens
+km0 <- prodlim(Hist(tte,status0)~treat,data=df.test)
+quantile(km0)
+
+
+```
+
+## Incidence rate
+
+```{r}
+library(epiR)
+df_treat = df_curr[df_curr$treat==1,]
+ncas <- as.numeric(table(df_treat$cens)[2]); ntar <- as.numeric(df_treat %>% summarise(persons_days = sum(tte)))
+tmp <- as.matrix(cbind(ncas, ntar))
+a1 = epi.conf(tmp, ctype = "inc.rate", method = "exact", design = 1, conf.level = 0.95)*1000
+
+df_control = df_curr[df_curr$treat==0,]
+ncas <- as.numeric(table(df_control$cens)[2]); ntar <- as.numeric(df_control %>% summarise(persons_days = sum(tte)))
+tmp <- as.matrix(cbind(ncas, ntar))
+a2 = epi.conf(tmp, ctype = "inc.rate", method = "exact", design = 1, conf.level = 0.95)*1000
+a1
+a2
+
+```
+
+## Survival function according to vaccination status
+
+```{r, fig.height=6, fig.width=10,out.width = "100%",dpi = 100}
+library("survminer")
+x_max = ceiling(max(df_curr$tte))  + 10
+y_max = 0.01
+df_graph = df_curr %>% mutate(treat_cat = as.factor(treat_cat))
+fit2 <- survfit(Surv(tte, cens) ~ treat_cat, data = df_graph)
+#fit <- coxph( Surv(tte, cens) ~ date_from_sep, data = df_graph, ties = "efron" )
+#print(fit)
+
+p = ggsurvplot(
+  fit2,                     # survfit object with calculated statistics.
+  fun = "event",
+  surv.scale = "percent",
+  pval = TRUE,             # show p-value of log-rank test.
+  conf.int = FALSE,         # show confidence intervals for  point estimaes of survival curves.
+  conf.int.style = "step",  # customize style of confidence intervals
+  xlab = "Days since baseline",   # customize X axis label.
+  break.time.by = 30,     # break X axis in time intervals by 200.
+  ggtheme = theme_bw(), # customize plot and risk table with a theme.
+  risk.table = "absolute",  # absolute number and percentage at risk.
+  risk.table.y.text.col = T,# colour risk table text annotations.
+  risk.table.y.text = FALSE,# show bars instead of names in text annotations in legend of risk table.
+  ncensor.plot = TRUE,      # plot the number of censored subjects at time t
+  #surv.median.line = "hv"  # add the median survival pointer.
+  # legend.labs =  c("October", "November/December"),    # change legend labels.
+  
+  # palette =  c("#E7B800", "#2E9FDF"), # custom color palettes.
+  ylim = c(0,y_max),
+  xlim = c(0,x_max),
+  pval.coord = c(100, y_max)
+)
+#p$ncensor.plot <- p$ncensor.plot + scale_y_continuous(breaks = c(0,200, 400))
+p
+```
+
+## Effectiveness without adjustment
+
+```{r}
+
+fm1 <- coxph(Surv(tte, cens) ~ treat, data = df_curr)
+tidy(fm1, exponentiate = TRUE)
+
+a = fm1 |> tidy(conf.int = TRUE, exponentiate = TRUE) |>  select(term, estimate, starts_with("conf")) |> filter(str_detect(term, "^treat"))
+HR1 = round(as.vector(100*(1 - a$estimate)),1)
+HR1.upper = round(as.vector(100*(1 - a$conf.low)),1)
+HR1.lower = round(as.vector(100*(1 - a$conf.high)),1)
+rm(a)
+```
+
+## Effectiveness: Adjusted for covariates
+
+```{r}
+
+fm2 <- coxph(Surv(tte, cens) ~ treat +  age + gender + comorbid_num  + nationality_bin_cat + month_period_cat, data = df_curr)
+tidy(fm2, exponentiate = TRUE)
+
+a = fm2 |> tidy(conf.int = TRUE, exponentiate = TRUE) |>  select(term, estimate, starts_with("conf")) |> filter(str_detect(term, "^treat"))
+HR2 = round(as.vector(100*(1 - a$estimate)),1)
+HR2.upper = round(as.vector(100*(1 - a$conf.low)),1)
+HR2.lower = round(as.vector(100*(1 - a$conf.high)),1)
+
+b = as.data.frame(cbind(outcome = outcome_name, follow_up = cut_off, HR_crude = HR1, HR_crude.lower = HR1.lower,  HR_crude.upper = HR1.upper,  HR_adj = HR2,  HR_adj.lower = HR2.lower,  HR_adj.upper = HR2.upper))
+results_all = as.data.frame(b)
+results_all
+rm(b)
+```
+
+
+## Standard Cox PH model: Schonfiled residuals
+
+```{r}
+index_non_stra = which(rownames(zph2$table) == "treat")
+plot(zph2[index_non_stra],lwd=2, hr = FALSE, xlab = "Days since full vaccination")
+abline(0,0, col=1,lty=3,lwd=2)
+abline(h= exp(fm2$coef[index_non_stra]), col=3, lwd=2, lty=2)
+HR_non_stra = 100*(1 - exp(fm2$coef[index_non_stra]))
+```
+
+
+## Time varying coefficients model using Step function using coxph package
+
+```{r}
+df.split <- survSplit(Surv(tte, cens) ~ ., data= df_curr, cut=c(cutoff_time_var),episode= "tgroup", id="ID")
+fit.split <- coxph(Surv(tstart, tte, cens) ~ treat:strata(tgroup) +  age + gender + comorbid_num  + nationality_bin_cat + month_period_cat, data=df.split)
+tidy(fit.split, exponentiate = TRUE)
+
+temp1 = fit.split %>% tbl_regression(exponentiate = TRUE, include = c("treat:strata(tgroup)"))
+temp1 = temp1 %>% modify_header(
+     update = list(estimate ~ "**Effectiveness (%)**")
+                           )
+temp1$table_body$estimate = round(100*(1 - temp1$table_body$estimate),1)
+conf.high1 = round(100*(1 - temp1$table_body$conf.low),1)
+conf.low1 = round(100*(1 - temp1$table_body$conf.high),1)
+temp1$table_body$ci = paste(conf.low1,",", conf.high1)
+theme_gtsummary_compact()
+temp1 %>% as_gt()
+```
+
+
+# Outcome: Death
+
+```{r}
+rm(list = ls()[-match(c("df_total", "cut_off", "cutoff_time_var"), ls())])
+gc()
+outcome_name = "death"
+```
+
+
+## Admission according to vaccination status
+```{r}
+df_curr = df_total %>% rename(tte = tte_death, cens = cens_death) %>% filter(tte > 0 & !is.na(tte)) 
+#df_curr = df_curr %>% mutate(tte1 = ifelse(tte > 180, 180, tte), cens1 = ifelse(tte > 180,0,cens))%>% select(-c(tte,cens)) %>% rename(tte = tte1, cens = cens1)
+df_curr = df_curr %>% mutate(cens_cat = if_else(cens==0,"Alive", "Died"), treat_cat = if_else(treat==0,"Non-vaccinated", "Vaccinated"))
+table(df_curr$treat_cat, df_curr$cens_cat, useNA = "always")
+```
+
+## Median follow-up
+```{r}
+#Using prodlim package#
+df.test = df_curr
+df.test$status0 <- 1- df.test$cens
+km0 <- prodlim(Hist(tte,status0)~treat,data=df.test)
+quantile(km0)
+
+
+```
+
+## Incidence rate
+
+```{r}
+library(epiR)
+df_treat = df_curr[df_curr$treat==1,]
+ncas <- as.numeric(table(df_treat$cens)[2]); ntar <- as.numeric(df_treat %>% summarise(persons_days = sum(tte)))
+tmp <- as.matrix(cbind(ncas, ntar))
+a1 = epi.conf(tmp, ctype = "inc.rate", method = "exact", design = 1, conf.level = 0.95)*1000
+
+df_control = df_curr[df_curr$treat==0,]
+ncas <- as.numeric(table(df_control$cens)[2]); ntar <- as.numeric(df_control %>% summarise(persons_days = sum(tte)))
+tmp <- as.matrix(cbind(ncas, ntar))
+a2 = epi.conf(tmp, ctype = "inc.rate", method = "exact", design = 1, conf.level = 0.95)*1000
+a1
+a2
+
+```
+
+## Survival function according to vaccination status
+
+```{r, fig.height=6, fig.width=10,out.width = "100%",dpi = 100}
+library("survminer")
+x_max = ceiling(max(df_curr$tte))  + 10
+y_max = 0.01
+df_graph = df_curr %>% mutate(treat_cat = as.factor(treat_cat))
+fit2 <- survfit(Surv(tte, cens) ~ treat_cat, data = df_graph)
+#fit <- coxph( Surv(tte, cens) ~ date_from_sep, data = df_graph, ties = "efron" )
+#print(fit)
+
+p = ggsurvplot(
+  fit2,                     # survfit object with calculated statistics.
+  fun = "event",
+  surv.scale = "percent",
+  pval = TRUE,             # show p-value of log-rank test.
+  conf.int = FALSE,         # show confidence intervals for  point estimaes of survival curves.
+  conf.int.style = "step",  # customize style of confidence intervals
+  xlab = "Days since baseline",   # customize X axis label.
+  break.time.by = 30,     # break X axis in time intervals by 200.
+  ggtheme = theme_bw(), # customize plot and risk table with a theme.
+  risk.table = "absolute",  # absolute number and percentage at risk.
+  risk.table.y.text.col = T,# colour risk table text annotations.
+  risk.table.y.text = FALSE,# show bars instead of names in text annotations in legend of risk table.
+  ncensor.plot = TRUE,      # plot the number of censored subjects at time t
+  #surv.median.line = "hv"  # add the median survival pointer.
+  # legend.labs =  c("October", "November/December"),    # change legend labels.
+  
+  # palette =  c("#E7B800", "#2E9FDF"), # custom color palettes.
+  ylim = c(0,y_max),
+  xlim = c(0,x_max),
+  pval.coord = c(100, y_max)
+)
+#p$ncensor.plot <- p$ncensor.plot + scale_y_continuous(breaks = c(0,200, 400))
+p
+```
+
+## Effectiveness without adjustment
+
+```{r}
+
+fm1 <- coxph(Surv(tte, cens) ~ treat, data = df_curr)
+tidy(fm1, exponentiate = TRUE)
+
+a = fm1 |> tidy(conf.int = TRUE, exponentiate = TRUE) |>  select(term, estimate, starts_with("conf")) |> filter(str_detect(term, "^treat"))
+HR1 = round(as.vector(100*(1 - a$estimate)),1)
+HR1.upper = round(as.vector(100*(1 - a$conf.low)),1)
+HR1.lower = round(as.vector(100*(1 - a$conf.high)),1)
+rm(a)
+```
+
+## Effectiveness: Adjusted for covariates
+
+```{r}
+
+fm2 <- coxph(Surv(tte, cens) ~ treat +  age + gender + comorbid_num  + nationality_bin_cat + month_period_cat, data = df_curr)
+tidy(fm2, exponentiate = TRUE)
+
+a = fm2 |> tidy(conf.int = TRUE, exponentiate = TRUE) |>  select(term, estimate, starts_with("conf")) |> filter(str_detect(term, "^treat"))
+HR2 = round(as.vector(100*(1 - a$estimate)),1)
+HR2.upper = round(as.vector(100*(1 - a$conf.low)),1)
+HR2.lower = round(as.vector(100*(1 - a$conf.high)),1)
+
+b = as.data.frame(cbind(outcome = outcome_name, follow_up = cut_off, HR_crude = HR1, HR_crude.lower = HR1.lower,  HR_crude.upper = HR1.upper,  HR_adj = HR2,  HR_adj.lower = HR2.lower,  HR_adj.upper = HR2.upper))
+results_all = as.data.frame(b)
+results_all
+rm(b)
+```
+
+
+## Testing PH assmption
+
+
+```{r}
+
+zph2 <- cox.zph(fm2)
+zph2
+
+```
+
+
+## Standard Cox PH model: Schonfiled residuals
+
+```{r}
+index_non_stra = which(rownames(zph2$table) == "treat")
+plot(zph2[index_non_stra],lwd=2, hr = FALSE, xlab = "Days since full vaccination")
+abline(0,0, col=1,lty=3,lwd=2)
+abline(h= exp(fm2$coef[index_non_stra]), col=3, lwd=2, lty=2)
+HR_non_stra = 100*(1 - exp(fm2$coef[index_non_stra]))
+```
+
+
